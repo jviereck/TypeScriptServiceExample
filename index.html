@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>TypeScriptServices example</title>
+    <script src="tabIndent.js"></script>
+    <script>
+      var __dirname = '';
+    </script>
+    <script src="ServiceBuilder.js"></script>
+  </head>
+  <body>
+    <a href="https://github.com/jviereck/TypeScriptServiceExample"><img style="position: absolute; top: 0; right: 0; border: 0; z-index: 1" src="https://s3.amazonaws.com/github/ribbons/forkme_right_darkblue_121621.png" alt="Fork me on GitHub"></a>
+    <div style="position:absolute;left:5px;width:300px;">
+      <button onclick="refactor()">Refactor</button>
+      <div id="dump"></div>
+    </div>
+    <textarea id="area" rows="40" cols="80" style="position:absolute;left:301px">class Greeter {
+	greeting: string;
+	constructor (message: string) {
+		this.greeting = message;
+	}
+	greet() {
+		return "Hello, " + this.greeting;
+	}
+}
+
+var greeter = new Greeter("world");
+greeter.gr</textarea>
+
+<script>
+  alert('* Move the cursor to see information exposed by the TypeScriptLanguageService.\n\
+* Information shows up on the left.\n\
+* Notice the "Refactor" button on the top.\n\
+* Have fun!'
+  );
+
+  // Dom setup stuff.
+  var area = document.getElementById("area");
+  var dumpDOM = document.getElementById("dump");
+  area.selectionStart = area.value.length;
+  area.addEventListener('keydown', update, true); // Trigger update on change
+  area.addEventListener('mouseup', update, true); // Trigger update on click
+  tabIndent.render(area);
+
+  // Create a TyepScriptLanguageServiceHost.
+  var lsh = new ServiceBuilder.TypeScriptLSH();
+
+  // Add the current content of the textarea.
+  var filename = 'empty.ts';
+  var contents = area.value;
+  lsh.addScript(filename, contents, false);
+
+  // Get the language service. That's the object where the magic happens!
+  var langSvc = lsh.getLanguageService();
+
+  // --------------------------------------------------------------------------
+  // Simple refactor function.
+
+  function refactor() {
+    var refs = langSvc.getReferencesAtPosition(filename, area.selectionStart);
+    if (!refs) {
+      alert('Sorry, no reference found at current position.');
+      return;
+    }
+
+    var newValue = prompt('Refactor "' + refs[0].ast.text + '" to?');
+    if (!newValue) {
+      return;
+    }
+
+    var str = area.value;
+    refs.reverse().forEach(function(def) {
+      var ast = def.ast;
+      str = str.substring(0, ast.minChar) + newValue + str.substring(ast.limChar);
+    });
+    area.value = str;
+  }
+
+  // --------------------------------------------------------------------------
+  // Diverse functions to dispaly information under the cursor.
+
+  function updateCompletion() {
+    var lines = area.value.split("\n");
+    var pos = posToLineCol(area.selectionStart);
+
+    var line = lines[pos.row];
+    line = line.substring(0, pos.col);
+    var idx = line.lastIndexOf('.');
+
+    if (idx !== -1) {
+      // If there is a "." on the line, then ask for complection after the ".",
+      // which lists all possible methods/properties on the target object.
+      var start = pos.linesOffset[pos.row] + idx;
+      dumpComplection(langSvc.getCompletionsAtPosition(filename, start, true));
+    } else {
+      dumpComplection(langSvc.getCompletionsAtPosition(filename, area.selectionStart, false));
+    }
+  }
+
+  function updateErrors() {
+    var errors = langSvc.getErrors(100)
+      .filter(function(error) {
+        return error.minChar != -1;
+      })
+      .map(function(error) {
+        return error.message;
+      })
+
+    dumpList('Error(s): ', errors);
+  }
+
+  function updateDefinition() {
+    var def = langSvc.getDefinitionAtPosition(filename, area.selectionStart);
+    if (def !== null) {
+      dumpEntry('Definition: ', def.name + ': ' + def.kind + ' ' + dumpPos(def.minChar, def.limChar));
+    } else {
+      dumpEntry('Definition: ', 'nothing here');
+    }
+  }
+
+  function updateReferences() {
+    var refs = langSvc.getReferencesAtPosition(filename, area.selectionStart);
+    if (refs !== null) {
+      dumpList('Reference(s): ', refs.map(function(def) {
+        return def.ast.text + ' ' + dumpPos(def.ast.minChar, def.ast.limChar)
+      }));
+    } else {
+      dumpEntry('Reference(s): ', 'nothing here');
+    }
+  }
+
+  function updateType() {
+    var type = langSvc.getTypeAtPosition(filename, area.selectionStart);
+    if (type !== null) {
+      var memberName = type.memberName;
+      if (memberName.entries) {
+        var entries = memberName.entries;
+        dumpEntry('Type: ', entries.map(function(entry) { return entry.text; }).join(', '));
+      } else {
+        dumpEntry('Type: ', type.memberName.text);
+      }
+    } else {
+      dumpEntry('Type: ', 'nothing here');
+    }
+  }
+
+  function update() {
+    setTimeout(function() {
+      dumpDOM.innerHTML = '';
+
+      // Update the entire script.
+      // TODO: Better only commit the changed ranges.
+      lsh.updateScript(filename, area.value, false);
+
+      updateType();
+      updateDefinition();
+      updateCompletion();
+      updateErrors();
+      updateReferences();
+    }, 0);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helper functions.
+
+  function posToLineCol(pos) {
+    var lines = area.value.split("\n");
+    var i = 0;
+    var linesOffset = [0];
+    var c = 0;
+    while (i < lines.length && lines[i].length < pos) {
+      c += lines[i].length + 1;
+      linesOffset.push(c);
+      pos -=  lines[i].length + 1;
+      i++;
+    }
+    return {
+      row: i,
+      col: pos,
+      linesOffset: linesOffset
+    };
+  }
+
+  function dump(html) {
+    dumpDOM.innerHTML += html;
+  }
+
+  function h3(html, inline) {
+    if (inline)
+      return '<h3 style="display:inline">' + html + '</h3>';
+    else
+      return '<h3>' + html + '</h3>';
+  }
+
+  function joinArray(input) {
+    if (Array.isArray(input)) {
+      input = input.join('');
+    }
+    return input;
+  }
+
+  function ul(html) {
+    return '<ul>' + joinArray(html) + '</ul>';
+  }
+
+  function li(html) {
+    return '<li>' + html + '</li>';
+  }
+
+  function dumpList(title, list) {
+    dump(h3(title));
+
+    if (list.length === 0) {
+      list = ['[none]'];
+    }
+
+    dump(ul(list.map(li)));
+  }
+
+  function dumpEntry(title, text) {
+    dump(h3(title, true));
+    dump(text);
+    dump('<br>');
+  }
+
+
+  function dumpComplection(res) {
+    dumpList('Possible completions:', res.entries.map(function(entry) {
+      return entry.name + ': ' + entry.type;
+    }));
+  }
+
+  function dumpPos(from, to) {
+    return '(' + from + ', ' + to + ')';
+  }
+</script>
+  </body>
+</html>
