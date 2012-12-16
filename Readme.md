@@ -5,7 +5,7 @@ required to integrate TypeScript into an IDE (get AST, type informations, comple
 
 This is a small demo using some of stuff shipping with the TypeScript repo. You can view the demo [here](http://jviereck.github.com/TypeScriptServiceExample/).
 
-To build the `ServiceBuilder.js` file, checkout the TypeScript repo
+To build the `ServiceBuilder.js` file, checkout the TypeScript repo into this repo
 
 ```
 git clone https://git01.codeplex.com/typescript ts
