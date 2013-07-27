@@ -8,99 +8,135 @@
 ///<reference path='ts\src\services\typescriptServices.ts' />
 
 module ServiceBuilder {
-  export class ScriptInfo {
-    public version: number;
-    public editRanges: { length: number; editRange: TypeScript.ScriptEditRange; }[] = [];
 
-    constructor (public name: string, public content: string, public isResident: bool, public maxScriptVersions: number) {
-      this.version = 1;
+    export class LanguageServicesDiagnostics implements Services.ILanguageServicesDiagnostics {
+
+        constructor(private destination: string) { }
+
+        public log(content: string): void {
+            //Imitates the LanguageServicesDiagnostics object when not in Visual Studio
+        }
+
     }
 
-    public updateContent(content: string, isResident: bool) {
-      this.editRanges = [];
-      this.content = content;
-      this.isResident = isResident;
-      this.version++;
+
+
+    export class Snapshot implements TypeScript.IScriptSnapshot {
+            constructor(private text: string) {
+            }
+
+            public getText(start: number, end: number): string {
+                return this.text.substring(start, end);
+            }
+
+            public getLength(): number {
+                return this.text.length;
+            }
+
+            public getLineStartPositions(): number[] {
+                return TypeScript.TextUtilities.parseLineStarts(TypeScript.SimpleText.fromString(this.text));
+            }
+
+            public getTextChangeRangeSinceVersion(scriptVersion: number): TypeScript.TextChangeRange {
+                //throw Errors.notYetImplemented();
+		return new TypeScript.TextChangeRange(new TypeScript.TextSpan(0, this.text.length),
+						      this.text.length);
+            }
+        }
+
+    export class ScriptInfo {
+        public version: number = 1;
+        public editRanges: { length: number; textChangeRange: TypeScript.TextChangeRange; }[] = [];
+        public lineMap: TypeScript.LineMap = null;
+
+        constructor(public fileName: string, public content: string, public isOpen = true) {
+            this.setContent(content);
+        }
+
+        private setContent(content: string): void {
+            this.content = content;
+            this.lineMap = TypeScript.LineMap.fromString(content);
+        }
+
+        public updateContent(content: string): void {
+            this.editRanges = [];
+            this.setContent(content);
+
+            this.version++;
+        }
+
+        public editContent(minChar: number, limChar: number, newText: string): void {
+            // Apply edits
+            var prefix = this.content.substring(0, minChar);
+            var middle = newText;
+            var suffix = this.content.substring(limChar);
+            this.setContent(prefix + middle + suffix);
+
+            // Store edit range + new length of script
+            this.editRanges.push({
+                length: this.content.length,
+                textChangeRange: new TypeScript.TextChangeRange(
+                    TypeScript.TextSpan.fromBounds(minChar, limChar), newText.length)
+            });
+
+            // Update version #
+            this.version++;
+        }
+
+        public getTextChangeRangeBetweenVersions(startVersion: number, endVersion: number): TypeScript.TextChangeRange {
+            if (startVersion === endVersion) {
+                // No edits!
+                return TypeScript.TextChangeRange.unchanged;
+            }
+
+            var initialEditRangeIndex = this.editRanges.length - (this.version - startVersion);
+            var lastEditRangeIndex = this.editRanges.length - (this.version - endVersion);
+
+            var entries = this.editRanges.slice(initialEditRangeIndex, lastEditRangeIndex);
+            return TypeScript.TextChangeRange.collapseChangesAcrossMultipleVersions(entries.map(e => e.textChangeRange));
+        }
     }
-
-    public editContent(minChar: number, limChar: number, newText: string) {
-      // Apply edits
-      var prefix = this.content.substring(0, minChar);
-      var middle = newText;
-      var suffix = this.content.substring(limChar);
-      this.content = prefix + middle + suffix;
-
-      // Store edit range + new length of script
-      this.editRanges.push({
-        length: this.content.length,
-        editRange: new TypeScript.ScriptEditRange(minChar, limChar, (limChar - minChar) + newText.length)
-      });
-
-      if (this.editRanges.length > this.maxScriptVersions) {
-        this.editRanges.splice(0, this.maxScriptVersions - this.editRanges.length);
-      }
-
-      // Update version #
-      this.version++;
-    }
-
-    public getEditRangeSinceVersion(version: number): TypeScript.ScriptEditRange {
-      if (this.version == version) {
-        // No edits!
-        return null;
-      }
-
-      var initialEditRangeIndex = this.editRanges.length - (this.version - version);
-      if (initialEditRangeIndex < 0 || initialEditRangeIndex >= this.editRanges.length) {
-        // Too far away from what we know
-        return TypeScript.ScriptEditRange.unknown();
-      }
-
-      var entries = this.editRanges.slice(initialEditRangeIndex);
-
-      var minDistFromStart = entries.map(x => x.editRange.minChar).reduce((prev, current) => Math.min(prev, current));
-      var minDistFromEnd = entries.map(x => x.length - x.editRange.limChar).reduce((prev, current) => Math.min(prev, current));
-      var aggDelta = entries.map(x => x.editRange.delta).reduce((prev, current) => prev + current);
-
-      return new TypeScript.ScriptEditRange(minDistFromStart, entries[0].length - minDistFromEnd, aggDelta);
-    }
-  }
 
   export class TypeScriptLSH implements Services.ILanguageServiceHost {
     private ls: Services.ILanguageService = null;
 
-    public scripts: ScriptInfo[] = [];
-    public maxScriptVersions = 100;
+    private fileNameToScript = new TypeScript.StringHashTable();
 
-    public addScript(name: string, content: string, isResident = false) {
-      var script = new ScriptInfo(name, content, isResident, this.maxScriptVersions);
-      this.scripts.push(script);
-    }
-
-    public updateScript(name: string, content: string, isResident = false) {
-      for (var i = 0; i < this.scripts.length; i++) {
-        if (this.scripts[i].name == name) {
-          this.scripts[i].updateContent(content, isResident);
-          return;
+      public addDefaultLibrary() {
+            //this.addScript("lib.d.ts", Harness.Compiler.libText);
         }
+
+      private getScriptInfo(fileName: string): ScriptInfo {
+          return this.fileNameToScript.lookup(fileName);
       }
-
-      this.addScript(name, content, isResident);
-    }
-
-    public editScript(name: string, minChar: number, limChar:number, newText:string) {
-      for (var i = 0; i < this.scripts.length; i++) {
-        if (this.scripts[i].name == name) {
-          this.scripts[i].editContent(minChar, limChar, newText);
-          return;
+    public addScript(fileName: string, content: string) {
+            var script = new ScriptInfo(fileName, content);
+            this.fileNameToScript.add(fileName, script);
         }
-      }
 
-      throw new Error("No script with name '" + name +"'");
-    }
+     public updateScript(fileName: string, content: string) {
+            var script = this.getScriptInfo(fileName);
+            if (script !== null) {
+                script.updateContent(content);
+                return;
+            }
 
-    public getScriptContent(scriptIndex: number): string {
-      return this.scripts[scriptIndex].content;
+            this.addScript(name, content);
+        }
+
+      public editScript(fileName: string, minChar: number, limChar: number, newText: string) {
+            var script = this.getScriptInfo(fileName);
+            if (script !== null) {
+                script.editContent(minChar, limChar, newText);
+                return;
+            }
+
+            throw new Error("No script with name '" + name + "'");
+        }
+
+
+      public getScriptContent(fileName: string): string {
+	  return this.getScriptInfo(fileName).content;
     }
 
     //////////////////////////////////////////////////////////////////////
@@ -115,6 +151,7 @@ module ServiceBuilder {
     public log(s: string): void {
       // For debugging...
       //IO.printLine("TypeScriptLS:" + s);
+	console.log(s)
     }
 
     //////////////////////////////////////////////////////////////////////
@@ -125,32 +162,43 @@ module ServiceBuilder {
       return null; // i.e. default settings
     }
 
-    public getScriptCount(): number {
-      return this.scripts.length;
+
+    public getScriptFileNames(): string[] {
+	return this.fileNameToScript.getAllKeys()
     }
 
-    public getScriptSourceText(scriptIndex: number, start: number, end: number): string {
-      return this.scripts[scriptIndex].content.substring(start, end);
+      public getScriptIsOpen(fileName: string): bool {
+	  return this.getScriptInfo(fileName).isOpen;
     }
 
-    public getScriptSourceLength(scriptIndex: number): number {
-      return this.scripts[scriptIndex].content.length;
+    public getScriptSourceText(fileName: string, start: number, end: number): string {
+      return this.getScriptInfo(fileName).content.substring(start, end);
     }
 
-    public getScriptId(scriptIndex: number): string {
-      return this.scripts[scriptIndex].name;
+    public getScriptSourceLength(fileName: string): number {
+      return this.getScriptInfo(fileName).content.length;
     }
 
-    public getScriptIsResident(scriptIndex: number): bool {
-      return this.scripts[scriptIndex].isResident;
+    public getScriptId(fileName: string): string {
+      return this.getScriptInfo(fileName).fileName;
     }
 
-    public getScriptVersion(scriptIndex: number): number {
-      return this.scripts[scriptIndex].version;
+    public getScriptIsResident(fileName: string): bool {
+      return this.getScriptInfo(fileName).isOpen;
     }
 
-    public getScriptEditRangeSinceVersion(scriptIndex: number, scriptVersion: number): TypeScript.ScriptEditRange {
-      return this.scripts[scriptIndex].getEditRangeSinceVersion(scriptVersion);
+    public getScriptVersion(fileName: string): number {
+      return this.getScriptInfo(fileName).version;
+    }
+
+      public getScriptSnapshot(fileName: string): TypeScript.IScriptSnapshot {
+	  return new Snapshot(this.getScriptInfo(fileName).content);
+      }
+
+      public getScriptEditRangeSinceVersion(fileName: string, scriptVersion: number): TypeScript.TextChangeRange {
+	  var script = this.getScriptInfo(fileName);
+	return script.getTextChangeRangeBetweenVersions(scriptVersion, 
+							script.version);
     }
 
     //
@@ -159,7 +207,7 @@ module ServiceBuilder {
     //
     public getLanguageService(): Services.ILanguageService {
       // var ls = new Services.TypeScriptServicesFactory().createLanguageServiceShim(this);
-      var ls = new Services.TypeScriptServicesFactory().createLanguageService(this);
+      var ls = new Services.TypeScriptServicesFactory().createPullLanguageService(this);
       ls.refresh();
       this.ls = ls;
       return ls;
@@ -168,39 +216,45 @@ module ServiceBuilder {
     //
     // Parse file given its source text
     //
-    public parseSourceText(fileName: string, sourceText: TypeScript.ISourceText): TypeScript.Script {
-      var parser = new TypeScript.Parser();
-      parser.setErrorRecovery(null);
-      parser.errorCallback = (a, b, c, d) => { };
-
-      var script = parser.parse(sourceText, fileName, 0);
-      return script;
+    public parseSourceText(fileName: string, sourceText: TypeScript.IScriptSnapshot): TypeScript.Script {
+            var compilationSettings = new TypeScript.CompilationSettings();
+            var parseOptions = TypeScript.getParseOptions(compilationSettings);
+            return TypeScript.SyntaxTreeToAstVisitor.visit(
+                TypeScript.Parser.parse(fileName, 
+					TypeScript.SimpleText.fromScriptSnapshot(sourceText), 
+					TypeScript.isDTSFile(fileName), 
+					TypeScript.LanguageVersion.EcmaScript5, 
+					parseOptions),
+                fileName, compilationSettings);
     }
+
+      public getDiagnosticsObject(): Services.ILanguageServicesDiagnostics {
+            return new LanguageServicesDiagnostics("");
+        }
 
     //
     // line and column are 1-based
     //
-    public lineColToPosition(fileName: string, line: number, col: number): number {
-      var script = this.ls.getScriptAST(fileName);
-      assert.notNull(script);
-      assert(line >= 1);
-      assert(col >= 1);
-      assert(line < script.locationInfo.lineMap.length);
+      public lineColToPosition(fileName: string, line: number, col: number): number {
+            var script: ScriptInfo = this.fileNameToScript.lookup(fileName);
+            assert.notNull(script);
+            assert(line >= 1);
+            assert(col >= 1);
 
-      return TypeScript.getPositionFromLineColumn(script, line, col);
-    }
+            return script.lineMap.getPosition(line - 1, col - 1);
+        }
 
     //
     // line and column are 1-based
     //
-    public positionToLineCol(fileName: string, position: number): TypeScript.ILineCol {
-      var script = this.ls.getScriptAST(fileName);
+    public positionToLineCol(fileName: string, position: number): TypeScript.LineAndCharacter {
+      var script: ScriptInfo = this.fileNameToScript.lookup(fileName);
       assert.notNull(script);
 
-      var result = TypeScript.getLineColumnFromPosition(script, position);
+      var result = script.lineMap.getLineAndCharacterFromPosition(position);
 
-      assert(result.line >= 1);
-      assert(result.col >= 1);
+	assert(result.line() >= 1);
+	assert(result.character() >= 1);
       return result;
     }
 
