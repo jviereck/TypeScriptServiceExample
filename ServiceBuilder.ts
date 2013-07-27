@@ -39,7 +39,8 @@ module ServiceBuilder {
 
             public getTextChangeRangeSinceVersion(scriptVersion: number): TypeScript.TextChangeRange {
                 //throw Errors.notYetImplemented();
-  	return TypeScript.TextChangeRange.unchanged;
+		return new TypeScript.TextChangeRange(new TypeScript.TextSpan(0, this.text.length),
+						      this.text.length);
             }
         }
 
@@ -60,6 +61,7 @@ module ServiceBuilder {
         public updateContent(content: string): void {
             this.editRanges = [];
             this.setContent(content);
+
             this.version++;
         }
 
@@ -149,6 +151,7 @@ module ServiceBuilder {
     public log(s: string): void {
       // For debugging...
       //IO.printLine("TypeScriptLS:" + s);
+	console.log(s)
     }
 
     //////////////////////////////////////////////////////////////////////
